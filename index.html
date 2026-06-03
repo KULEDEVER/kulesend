@@ -3,18 +3,164 @@
 <head>
     <meta charset="UTF-8">
     <title>KULESEND</title>
+    <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
-<h1>KULESEND</h1>
-<p>Send messages using usernames.</p>
+<h2>KULESEND 💬</h2>
 
-<a href="./account/">Get Started</a>
+<button id="googleLogin">Sign in with Google</button>
 
-<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js"></script>
-<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-database.js"></script>
+<hr>
 
-<script src="../script/script.js"></script>
+<div>
+    <input id="username" placeholder="username">
+    <button id="saveUsername">Save Username</button>
+</div>
+
+<hr>
+
+<div>
+    <input id="dmUsername" placeholder="message username">
+    <button id="startDM">Open Chat</button>
+</div>
+
+<hr>
+
+<div id="chatBox"></div>
+
+<input id="messageInput">
+<button id="sendBtn">Send</button>
+
+<!-- Firebase compat -->
+<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/12.14.0/firebase-database-compat.js"></script>
+
+<script>
+/* ================= FIREBASE ================= */
+
+const firebaseConfig = {
+    apiKey: "YOUR_KEY",
+    authDomain: "kulesend-kuledever.firebaseapp.com",
+    databaseURL: "https://kulesend-kuledever-default-rtdb.firebaseio.com",
+    projectId: "kulesend-kuledever",
+    storageBucket: "kulesend-kuledever.appspot.com",
+    messagingSenderId: "376216967501",
+    appId: "YOUR_APP_ID"
+};
+
+firebase.initializeApp(firebaseConfig);
+
+const auth = firebase.auth();
+const db = firebase.database();
+const provider = new firebase.auth.GoogleAuthProvider();
+
+/* ================= LOGIN ================= */
+
+document.getElementById("googleLogin").onclick = () => {
+    auth.signInWithPopup(provider);
+};
+
+/* ================= STATE ================= */
+
+let currentChatId = null;
+
+/* ================= SAVE USERNAME ================= */
+
+document.getElementById("saveUsername").onclick = async () => {
+
+    const user = auth.currentUser;
+    const username = document.getElementById("username").value;
+
+    if (!user) return;
+
+    await db.ref("users/" + user.uid).set({
+        username,
+        email: user.email
+    });
+
+    alert("Username saved");
+};
+
+/* ================= FIND USER ================= */
+
+function findUser(username, cb) {
+
+    db.ref("users").once("value", snap => {
+
+        let found = null;
+
+        snap.forEach(child => {
+            if (child.val().username === username) {
+                found = child.key;
+            }
+        });
+
+        cb(found);
+    });
+}
+
+/* ================= CHAT ID ================= */
+
+function getChatId(a, b) {
+    return a < b ? a + "_" + b : b + "_" + a;
+}
+
+/* ================= OPEN DM ================= */
+
+document.getElementById("startDM").onclick = () => {
+
+    const username = document.getElementById("dmUsername").value;
+
+    findUser(username, uid => {
+
+        if (!uid) return alert("User not found");
+
+        currentChatId = getChatId(auth.currentUser.uid, uid);
+
+        loadChat();
+    });
+};
+
+/* ================= LOAD CHAT ================= */
+
+function loadChat() {
+
+    const chatBox = document.getElementById("chatBox");
+    chatBox.innerHTML = "";
+
+    db.ref("chats/" + currentChatId + "/messages")
+    .on("child_added", snap => {
+
+        const msg = snap.val();
+
+        const div = document.createElement("div");
+        div.innerText = msg.text;
+
+        chatBox.appendChild(div);
+    });
+}
+
+/* ================= SEND MESSAGE ================= */
+
+document.getElementById("sendBtn").onclick = () => {
+
+    const input = document.getElementById("messageInput");
+
+    if (!input.value || !currentChatId) return;
+
+    db.ref("chats/" + currentChatId + "/messages").push({
+        from: auth.currentUser.uid,
+        text: input.value,
+        time: Date.now()
+    });
+
+    input.value = "";
+};
+
+</script>
+
 </body>
 </html>
