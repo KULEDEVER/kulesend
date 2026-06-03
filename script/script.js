@@ -1,206 +1,246 @@
-import { auth, db } from "./firebase.js";
+const auth = window.auth;
+const db = window.db;
+const provider = window.provider;
 
 import {
-    onAuthStateChanged,
-    GoogleAuthProvider,
-    signInWithPopup
-} from "firebase/auth";
+  signInWithPopup,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/12.14.0/firebase-auth.js";
 
 import {
-    ref,
-    set,
-    push,
-    get,
-    onChildAdded
-} from "firebase/database";
+  ref,
+  set,
+  get,
+  push,
+  onChildAdded,
+  child
+} from "https://www.gstatic.com/firebasejs/12.14.0/firebase-database.js";
 
-const provider = new GoogleAuthProvider();
+/* ---------------- LOGIN ---------------- */
 
-/* ---------------- AUTH ---------------- */
+const googleLogin = document.getElementById("googleLogin");
 
-if (document.getElementById("googleLogin")) {
-    document.getElementById("googleLogin").addEventListener("click", async () => {
-        await signInWithPopup(auth, provider);
-    });
+if (googleLogin) {
+  googleLogin.addEventListener("click", () => {
+    signInWithPopup(auth, provider);
+  });
 }
 
-/* ---------------- ROUTING ---------------- */
+/* ---------------- AUTH + ROUTING ---------------- */
 
 onAuthStateChanged(auth, async (user) => {
 
-    const path = window.location.pathname;
+  const path = window.location.pathname;
 
-    if (!user) {
-        if (path.includes("/home")) {
-            window.location.href = "/account/";
-        }
-        return;
+  if (!user) {
+    if (path.includes("/home")) {
+      window.location.href = "/account/";
     }
+    return;
+  }
 
-    const userSnap = await get(ref(db, "users/" + user.uid));
+  const snap = await get(ref(db, "users/" + user.uid));
 
-    if (!userSnap.exists()) {
-        if (!path.includes("/username")) {
-            window.location.href = "/account/username.html";
-        }
-        return;
+  // no username yet
+  if (!snap.exists()) {
+    if (!path.includes("/username")) {
+      window.location.href = "/account/username.html";
     }
+    return;
+  }
 
-    if (path.includes("/account")) {
-        window.location.href = "/home/";
-    }
+  // already has username → block account pages
+  if (path.includes("/account")) {
+    window.location.href = "/home/";
+  }
 
-    loadGroups(user.uid);
+  loadGroups(user.uid);
 });
 
-/* ---------------- USERNAME LOOKUP ---------------- */
+/* ---------------- SAVE USERNAME ---------------- */
 
-async function findUserByUsername(username) {
-    const snap = await get(ref(db, "users"));
+const usernameForm = document.getElementById("usernameForm");
+
+if (usernameForm) {
+  usernameForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const user = auth.currentUser;
+    const username = document.getElementById("username").value;
+
+    if (!user) return;
+
+    await set(ref(db, "users/" + user.uid), {
+      username: username,
+      email: user.email
+    });
+
+    window.location.href = "/home/";
+  });
+}
+
+/* ---------------- FIND USER BY USERNAME ---------------- */
+
+function findUserByUsername(username, callback) {
+
+  get(ref(db, "users")).then(snapshot => {
 
     let result = null;
 
-    snap.forEach(child => {
-        if (child.val().username === username) {
-            result = child.key;
-        }
+    snapshot.forEach(childSnap => {
+      if (childSnap.val().username === username) {
+        result = childSnap.key;
+      }
     });
 
-    return result;
+    callback(result);
+  });
 }
 
-/* ---------------- DM SYSTEM ---------------- */
-
-function getChatId(uid1, uid2) {
-    return uid1 < uid2 ? uid1 + "_" + uid2 : uid2 + "_" + uid1;
-}
-
-/* START DM */
-
-if (document.getElementById("startDM")) {
-    document.getElementById("startDM").addEventListener("click", async () => {
-
-        const username = document.getElementById("dmUsername").value;
-        const targetUid = await findUserByUsername(username);
-
-        if (!targetUid) {
-            alert("User not found");
-            return;
-        }
-
-        openChat(targetUid, false);
-    });
-}
-
-/* ---------------- GROUP SYSTEM ---------------- */
-
-if (document.getElementById("createGroup")) {
-    document.getElementById("createGroup").addEventListener("click", async () => {
-
-        const user = auth.currentUser;
-        const name = document.getElementById("groupName").value;
-
-        const groupId = "group_" + Date.now();
-
-        await set(ref(db, "groups/" + groupId), {
-            name: name,
-            members: {
-                [user.uid]: true
-            },
-            createdAt: Date.now()
-        });
-
-        loadGroups(user.uid);
-    });
-}
-
-/* LOAD GROUPS */
-
-function loadGroups(uid) {
-
-    const groupList = document.getElementById("groupList");
-    if (!groupList) return;
-
-    get(ref(db, "groups")).then(snapshot => {
-
-        groupList.innerHTML = "";
-
-        snapshot.forEach(child => {
-            const group = child.val();
-
-            if (group.members && group.members[uid]) {
-
-                const btn = document.createElement("button");
-                btn.innerText = group.name;
-
-                btn.onclick = () => openChat(child.key, true);
-
-                groupList.appendChild(btn);
-            }
-        });
-    });
-}
-
-/* ---------------- CHAT CORE ---------------- */
+/* ---------------- CHAT STATE ---------------- */
 
 let currentChatId = null;
 let currentIsGroup = false;
 
-/* OPEN CHAT */
+/* ---------------- DM CHAT ID ---------------- */
+
+function getChatId(uid1, uid2) {
+  return uid1 < uid2 ? uid1 + "_" + uid2 : uid2 + "_" + uid1;
+}
+
+/* ---------------- OPEN CHAT ---------------- */
 
 function openChat(id, isGroup) {
 
-    currentChatId = id;
-    currentIsGroup = isGroup;
+  currentChatId = id;
+  currentIsGroup = isGroup;
 
-    const chatBox = document.getElementById("chatBox");
-    const header = document.getElementById("chatHeader");
+  const chatBox = document.getElementById("chatBox");
+  if (!chatBox) return;
 
-    chatBox.innerHTML = "";
+  chatBox.innerHTML = "";
 
-    const path = isGroup
-        ? "groups/" + id + "/messages"
-        : "chats/" + getChatId(auth.currentUser.uid, id) + "/messages";
+  let path;
 
-    header.innerText = isGroup ? "Group Chat" : "DM";
+  if (isGroup) {
+    path = "groups/" + id + "/messages";
+  } else {
+    path = "chats/" + getChatId(auth.currentUser.uid, id) + "/messages";
+  }
 
-    onChildAdded(ref(db, path), (snap) => {
-        const msg = snap.val();
+  const chatRef = ref(db, path);
 
-        const div = document.createElement("div");
-        div.innerText = msg.text;
+  onChildAdded(chatRef, (snap) => {
 
-        chatBox.appendChild(div);
-    });
+    const msg = snap.val();
+
+    const div = document.createElement("div");
+    div.innerText = msg.text;
+
+    chatBox.appendChild(div);
+  });
 }
 
-/* SEND MESSAGE */
+/* ---------------- SEND MESSAGE ---------------- */
 
-if (document.getElementById("sendBtn")) {
+const sendBtn = document.getElementById("sendBtn");
 
-    document.getElementById("sendBtn").addEventListener("click", async () => {
+if (sendBtn) {
+  sendBtn.addEventListener("click", async () => {
 
-        const input = document.getElementById("messageInput");
-        const text = input.value;
+    const input = document.getElementById("messageInput");
 
-        if (!text || !currentChatId) return;
+    if (!input.value || !currentChatId) return;
 
-        const user = auth.currentUser;
+    let path;
 
-        let path = "";
+    if (currentIsGroup) {
+      path = "groups/" + currentChatId + "/messages";
+    } else {
+      path = "chats/" + getChatId(auth.currentUser.uid, currentChatId) + "/messages";
+    }
 
-        if (currentIsGroup) {
-            path = "groups/" + currentChatId + "/messages";
-        } else {
-            path = "chats/" + getChatId(user.uid, currentChatId) + "/messages";
-        }
+    await push(ref(db, path), {
+      from: auth.currentUser.uid,
+      text: input.value,
+      timestamp: Date.now()
+    });
 
-        await push(ref(db, path), {
-            from: user.uid,
-            text: text,
-            timestamp: Date.now()
+    input.value = "";
+  });
+}
+
+/* ---------------- START DM ---------------- */
+
+const startDM = document.getElementById("startDM");
+
+if (startDM) {
+  startDM.addEventListener("click", () => {
+
+    const username = document.getElementById("dmUsername").value;
+
+    findUserByUsername(username, (uid) => {
+
+      if (!uid) {
+        alert("User not found");
+        return;
+      }
+
+      openChat(uid, false);
+    });
+  });
+}
+
+/* ---------------- GROUPS ---------------- */
+
+const createGroupBtn = document.getElementById("createGroup");
+
+if (createGroupBtn) {
+  createGroupBtn.addEventListener("click", async () => {
+
+    const user = auth.currentUser;
+    const name = document.getElementById("groupName").value;
+
+    const groupId = "group_" + Date.now();
+
+    await set(ref(db, "groups/" + groupId), {
+      name: name,
+      members: {
+        [user.uid]: true
+      },
+      createdAt: Date.now()
+    });
+
+    loadGroups(user.uid);
+  });
+}
+
+/* ---------------- LOAD GROUPS ---------------- */
+
+function loadGroups(uid) {
+
+  const groupList = document.getElementById("groupList");
+  if (!groupList) return;
+
+  get(ref(db, "groups")).then(snapshot => {
+
+    groupList.innerHTML = "";
+
+    snapshot.forEach(childSnap => {
+
+      const group = childSnap.val();
+
+      if (group.members && group.members[uid]) {
+
+        const btn = document.createElement("button");
+        btn.innerText = group.name;
+
+        btn.addEventListener("click", () => {
+          openChat(childSnap.key, true);
         });
 
-        input.value = "";
+        groupList.appendChild(btn);
+      }
     });
+  });
 }
